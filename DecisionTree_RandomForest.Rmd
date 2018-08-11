@@ -1,0 +1,283 @@
+---
+title: "Decision Tree and Random Forest"
+author: "Mathew James Athoopallil"
+output: html_notebook
+---
+
+
+```{r}
+
+library(rpart)
+library(caret)
+library(ggplot2)
+library(lattice)
+library(rpart.plot)
+library(ROCR)
+library(randomForest)
+library(gridExtra)
+library(parallel)
+library(foreach)
+library(randomForest)
+library(dplyr)
+
+# Reading the file
+
+setwd("D:/Github/Census/Census_DT")
+adult_train <- read.csv('adult-train.csv',header = T,sep = ",", stringsAsFactors = F)
+adult_test <- read.csv('adult-test.csv',header = T,sep = ",", stringsAsFactors = F)
+
+```
+
+```{r}
+
+# Identifying columns with missing values
+
+colnames(adult_train)[colSums(adult_train == "?")>0] 
+colnames(adult_test)[colSums(adult_test == "?")>0] 
+
+
+# Cleaning the data in both the datasets.
+
+adult_train[adult_train=="?"]<- NA
+adult_train<- na.omit(adult_train)
+
+adult_test[adult_test=="?"] <- NA
+adult_test <- na.omit(adult_test)
+
+adult_train$income <- as.factor(adult_train$income)
+adult_test$income <- as.factor(adult_test$income)
+
+# Removing fnlwgt and education_num as weight is not being used in this analysis and redundancy of education_num
+
+adult_train$fnlwgt <- NULL
+adult_test$fnlwgt <- NULL
+
+adult_train$education_num <- NULL
+adult_test$education_num <- NULL
+
+adult_train$workclass <- gsub('^Federal-gov', 'Government', adult_train$workclass)
+adult_train$workclass <- gsub('^Local-gov', 'Government', adult_train$workclass)
+adult_train$workclass <- gsub('^State-gov', 'Government', adult_train$workclass) 
+
+
+adult_test$workclass <- gsub('^Federal-gov', 'Government', adult_test$workclass)
+adult_test$workclass <- gsub('^Local-gov', 'Government', adult_test$workclass)
+adult_test$workclass <- gsub('^State-gov', 'Government', adult_test$workclass) 
+
+adult_train$workclass <- gsub('^Self-emp-inc', 'Self-Employed', adult_train$workclass)
+adult_train$workclass <- gsub('^Self-emp-not-inc', 'Self-Employed', adult_train$workclass)
+
+adult_test$workclass <- gsub('^Self-emp-inc', 'Self-Employed', adult_test$workclass)
+adult_test$workclass <- gsub('^Self-emp-not-inc', 'Self-Employed', adult_test$workclass)
+
+adult_train$workclass <- gsub('^Never-worked', 'Other', adult_train$workclass)
+adult_train$workclass <- gsub('^Without-pay', 'Other', adult_train$workclass)
+
+adult_test$workclass <- gsub('^Never-worked', 'Other', adult_test$workclass)
+adult_test$workclass <- gsub('^Without-pay', 'Other', adult_test$workclass)
+
+adult_train$marital_status <- gsub('Married-AF-spouse', 'Married', adult_train$marital_status)
+adult_train$marital_status <- gsub('Married-civ-spouse', 'Married', adult_train$marital_status)
+adult_train$marital_status <- gsub('Married-spouse-absent', 'Married', adult_train$marital_status)
+adult_train$marital_status <- gsub('Never-married', 'Single', adult_train$marital_status)
+
+adult_test$marital_status <- gsub('Married-AF-spouse', 'Married', adult_test$marital_status)
+adult_test$marital_status <- gsub('Married-civ-spouse', 'Married', adult_test$marital_status)
+adult_test$marital_status <- gsub('Married-spouse-absent', 'Married', adult_test$marital_status)
+adult_test$marital_status <- gsub('Never-married', 'Single', adult_test$marital_status)
+
+adult_train <- mutate_if(adult_train, is.character, as.factor)
+adult_test <- mutate_if(adult_test, is.character, as.factor)
+
+```
+
+```{r}
+# Exploratory Data Analysis
+
+# Boxplot of age grouped by IncomeLevel
+
+boxplot (age ~ income, data = adult_train, 
+         main = "Age distribution for different income levels",
+         xlab = "Income Levels", ylab = "Age", col = "Red")
+
+
+# Distribution of age for income levels
+incomeBelow50K = (adult_train$income == "<=50K")
+xlimit = c (min (adult_train$age), max (adult_train$age))
+ylimit = c (0, 1600)
+ 
+hist1 = qplot (age, data = adult_train[incomeBelow50K,], margins = TRUE, 
+           binwidth = 2, xlim = xlimit, ylim = ylimit, colour = income)
+ 
+hist2 = qplot (age, data = adult_train[!incomeBelow50K,], margins = TRUE, 
+           binwidth = 2, xlim = xlimit, ylim = ylimit, colour = income)
+ 
+grid.arrange (hist1, hist2, nrow = 2)
+
+
+# Distribution of workclass
+
+qplot (income, data = adult_train, fill = workclass) + facet_grid (. ~ workclass)
+
+#Distribution of Occupation
+
+qplot (income, data = adult_train, fill = occupation) + facet_grid (. ~ occupation)
+
+#Distribution of Marital_status
+
+qplot (income, data = adult_train, fill = marital_status) + facet_grid (. ~ marital_status)
+
+#Distribution of Relationship
+
+qplot (income, data = adult_train, fill = relationship) + facet_grid (. ~ relationship)
+
+#Distribution of Education
+
+qplot (income, data = adult_train, fill = education) + facet_grid (. ~ education)
+
+```
+
+```{r}
+# Building the model
+
+model1 <- rpart(income ~., data = adult_train, method = 'class', cp = 1e-3)
+
+summary(model1)
+
+cat("The top 3 predictors in the model are: relationship, marital_status and capital_gains.\n\n")
+
+cat("The first split is done on the the predictor: relationship.\n\nThe predicted class of the first node is '<=50K'.\n\nThe distribution is 0.751(<=50K) and 0.249(>50K)\n\n")
+
+```
+
+
+```{r}
+#Plotting the decision tree
+
+rpart.plot(model1, fallen.leaves = T,type = 4)
+
+```
+
+```{r}
+# Predictiion and performance measures
+
+pred_model1 <- predict(model1, adult_test, type = "class")
+confusionMatrix(pred_model1,as.factor(adult_test$income))
+
+
+cat("The balanced accuracy of the model is ~0.726\n\n")
+
+cat("The balanced error rate is ~0.274\n\n")
+
+cat("The sensitivity is ~0.9482 and specificity is ~0.5035\n\n")
+
+
+pred.rocr1 <-predict(model1, newdata = adult_test, type = "prob")[,2]
+f.pred1 <- prediction(pred.rocr1,adult_test$income)
+f.perf1 <- performance(f.pred1,"tpr","fpr")
+plot(f.perf1,colorize = T, lwd = 3)
+abline(0,1)
+auc1 <- performance(f.pred1, measure = "auc")
+cat(paste("The area under curve (AUC) for this model is ", round(auc@y.values[[1]], 3)))
+
+printcp(model1)
+cpy <- model1$cptable[which.min(model1$cptable[,"xerror"]), "CP"]
+
+cat("\nThe complexity corresponding to the minimum value in the xerror column of the CP table has been already\nchosen. Hence pruning the tree will not significantly affect the predictive capabilities of the model.")
+
+```
+
+```{r}
+# Solving for the class imbalance issue by randomly choosing observations from the larger(by count) class to match that of the smaaller class 
+
+Num_Trainobs_ls_50K <- length(which(adult_train$income == "<=50K"))
+Num_Trainobs_gt_eq_50K <- length(which(adult_train$income == ">50K"))
+
+cat("The number of people with income >50K and <=50K is", Num_Trainobs_gt_eq_50K ,"and", Num_Trainobs_ls_50K,"respectively")
+
+
+train1 <- adult_train[which(adult_train$income == "<=50K"),]
+train2 <- adult_train[which(adult_train$income == ">50K"),]
+
+train_eq <- train1[sample(nrow(train1),Num_Trainobs_gt_eq_50K,replace = F),]
+
+trainfin <- rbind(train2,train_eq)
+
+#Randomly ordering the new data
+trainfin <- trainfin[sample(nrow(trainfin),nrow(trainfin),replace = F),]
+
+```
+
+```{r}
+#Creating model with new data
+
+model2 <- rpart(income ~., data = trainfin, method = 'class', cp = 0.01)
+
+pred_model2 <- predict(model2, adult_test, type = "class")
+confusionMatrix(pred_model2,as.factor(adult_test$income))
+
+pred.rocr2 <-predict(model2, newdata = adult_test, type = "prob")[,2]
+f.pred2 <- prediction(pred.rocr2,adult_test$income)
+f.perf2 <- performance(f.pred2,"tpr","fpr")
+plot(f.perf2,colorize = T, lwd = 3)
+abline(0,1)
+auc2 <- performance(f.pred2, measure = "auc")
+
+cat(paste("The area under curve (AUC) for this model is ", round(auc2@y.values[[1]], 3)))
+```
+
+```{r}
+# Random Forest
+
+rf<- randomForest(income ~ .,data = adult_train, importance = T)
+rfpred <- predict(rf,adult_test,type="class")
+confusionMatrix(rfpred, adult_test$income)
+
+```
+
+```{r}
+
+num_Testobs_ls_50K <- length(which(adult_test$income == "<=50K"))
+num_Testobs_gt_eq_50K <- length(which(adult_test$income == ">50K"))
+
+cat("The number of people in the test dataset with income >50K and <=50K is", num_Testobs_gt_eq_50K ,"and", num_Testobs_ls_50K,"respectively")
+
+cat("\n\nConsidering there is a significant difference in the number of 'Positive' class and 'Negative' class cases the values of specifivity and sensitivity is justified.")
+```
+
+```{r}
+varImpPlot(rf)
+
+cat("For Mean Decrease Accuracy, the most important variable is 'capital_gain', whereas the least important variable is 'native_country'\n\n")
+
+cat("For Mean Decrease Gini, the most important variable is 'relationship', whereas the least important variable is 'race'\n\n")
+```
+
+```{r}
+print(rf)
+
+mtry <- tuneRF(x = adult_train[,c(1:12)], y = adult_train$income, ntreeTry = 500,stepFactor = 1.5,improve = 0.01,trace = T,plot = T)
+print(mtry)
+
+cat("Based on the table above, OOB is lowest for mtry = 2\n\n")
+
+rf_tuned <- randomForest(income ~.,data = adult_train,importance = T,mtry = 2)
+rf_tuned_pred <- predict(rf_tuned, adult_test,type = "class")
+confusionMatrix(rf_tuned_pred,adult_test$income)
+```
+
+```{r}
+varImpPlot(rf_tuned)
+
+cat("For Mean Decrease Accuracy, the most important variable is 'capital_gain', whereas the least important variable is 'native_country'\n\n")
+
+cat("For Mean Decrease Gini, the most important variable is 'capital_gain', whereas the least important variable is 'race'\n\n")
+
+
+cat("\n\nThe balanced accuracy is ~ 0.6363")
+
+cat("\n\nThe sensitivity is ~0.9968 and specificity is ~0.2757")
+
+cat("\n\nThe accuracy is ~0.8197")
+```
+
